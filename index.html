@@ -527,6 +527,12 @@
           <div class="input-group"><label>Scale Factor</label><input type="number" id="scaleFactor" step="0.00000001" value="0.99995334"></div>
         </div>
         <div class="input-group">
+          <label>Mean Elevation of Traverse (m)</label>
+          <input type="number" id="meanElev" step="0.001" value="95.0"
+            title="ความสูงเฉลี่ยของ traverse เหนือระดับทะเล ใช้คำนวณ Combined Scale Factor">
+          <div id="csf-display" style="margin-top:4px;font-size:10px;color:var(--text2)"></div>
+        </div>
+        <div class="input-group">
           <label>Accuracy Class</label>
           <select id="accuracyClass">
             <option value="first" selected>First Order (1:100,000 / 4√N sec)</option>
@@ -798,7 +804,14 @@ function showPanel(id) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('panel-'+id).classList.add('active');
-  event.target.classList.add('active');
+  // Highlight the clicked tab (event may be undefined when called programmatically)
+  if (typeof event !== 'undefined' && event?.target) {
+    event.target.classList.add('active');
+  } else {
+    // Find tab by matching onclick attribute
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach(t => { if (t.getAttribute('onclick') && t.getAttribute('onclick').includes("'"+id+"'")) t.classList.add('active'); });
+  }
 }
 
 // ============================================================
@@ -1387,12 +1400,8 @@ function excelAzimuthFromCoords(n1, e1, n2, e2) {
 }
 
 function excelNextAzimuth(prevAz, turnAngle) {
-  // Excel Compute formula:
-  // IF(prev + angle > 540, prev + angle - 540,
-  //    IF(prev + angle < 180, prev + angle + 180, prev + angle - 180))
-  const s = prevAz + turnAngle;
-  let out = (s > 540) ? (s - 540) : ((s < 180) ? (s + 180) : (s - 180));
-  return ((out % 360) + 360) % 360;
+  // ISO/ICSM standard: az_new = (az_prev + obs - 180) mod 360
+  return ((prevAz + turnAngle - 180) % 360 + 360) % 360;
 }
 
 function shortestAngleDiffDeg(targetAz, computedAz) {
@@ -1404,7 +1413,21 @@ function shortestAngleDiffDeg(targetAz, computedAz) {
 }
 
 function computeTraverse() {
+  // Grid Scale Factor (user-entered, e.g. PTM k₀)
   const sf      = parseFloat(document.getElementById('scaleFactor').value) || 0.99995334;
+  // Combined Scale Factor = (R / (R + h)) × sf  [ISO/ICSM standard]
+  const R_earth = 6371000.0;
+  const meanElev = parseFloat(document.getElementById('meanElev')?.value) || 0;
+  const csf     = (R_earth / (R_earth + meanElev)) * sf;
+  // Display CSF suggestion in Project Info
+  const csfEl = document.getElementById('csf-display');
+  if (csfEl) {
+    const ppm = Math.abs(csf - sf) * 1e6;
+    csfEl.innerHTML = `CSF = <b style="color:var(--accent)">${csf.toFixed(8)}</b>` +
+      ` &nbsp;(Elev correction: ${ppm.toFixed(1)} ppm)`;
+  }
+  // Use csf for all grid distance calculations
+  const sfUsed = csf;
   const startN1 = parseFloat(document.getElementById('startN1').value);
   const startE1 = parseFloat(document.getElementById('startE1').value);
   const startN2 = parseFloat(document.getElementById('startN2').value);
@@ -1503,7 +1526,7 @@ function computeTraverse() {
     // Last row is the closing pair distance display only. It does not require angle/distance entry.
     const closePairDist = Math.hypot(closeN2 - closeN1, closeE2 - closeE1);
     const gd = isLast ? (state.meanDistances[stName] || closePairDist || 0) : (state.meanDistances[stName] || 0);
-    const grid = gd * sf;                          // T column
+    const grid = gd * sfUsed;                          // T column
 
     // Excel uses U/W only for traverse legs T5:T16; closing pair T17 is displayed but not included.
     const useForClosure = !isLast && gd > 0;
@@ -1543,7 +1566,8 @@ function computeTraverse() {
   const errN = sumLat - actualDeltaN;
   const errE = sumDep - actualDeltaE;
   const linearClosure = Math.sqrt(errN*errN + errE*errE);
-  const linearRatio   = linearClosure > 0 ? Math.round(sumGroundDist / linearClosure) : 999999;
+  // FGCS standard: ratio uses sumGridDist (Bowditch correction is applied on grid distances)
+  const linearRatio   = linearClosure > 0 ? Math.round(sumGridDist / linearClosure) : 999999;
 
   // ── STEP 5: Excel Bowditch correction ──
   // V = -(errN*T)/SumGrid, X = -(errE*T)/SumGrid
@@ -1600,7 +1624,7 @@ function computeTraverse() {
     azStartStr:    fmtDms(azStartDms.d, azStartDms.m, azStartDms.s),
     azCloseStr:    fmtDms(azCloseDms.d, azCloseDms.m, azCloseDms.s),
     azComputedStr: fmtDms(azCompDms.d,  azCompDms.m,  azCompDms.s),
-    N_angles, kFactor, sf,
+    N_angles, kFactor, sf, csf: sfUsed,
     angErrSec, angTolSec,
     corrPerStationSec: corrPerStnSec,
     sumGroundDist, sumGridDist,
@@ -1770,7 +1794,7 @@ function generateTraverseReport() {
       </tr>
       <tr style="background:#ffffff">
         <td style="padding:2px 5px;border:1px solid #bbb;text-align:left;vertical-align:middle;color:rgb(0,56,248)"><b>Mean Latitude = N/A</b></td>
-        <td style="padding:2px 5px;border:1px solid #bbb;text-align:left;vertical-align:middle;color:rgb(0,56,248)"><b>Combined Scale Factor = ${sf}</b></td>
+        <td style="padding:2px 5px;border:1px solid #bbb;text-align:left;vertical-align:middle;color:rgb(0,56,248)"><b>Combined Scale Factor (CSF) = ${(cv.csf||sf).toFixed(8)}</b></td>
       </tr>
       <tr style="background:#ffffff">
         <td style="padding:2px 5px;border:1px solid #bbb;text-align:left;vertical-align:middle;color:rgb(0,56,248)"><b>Sum Observed Distance = ${cv.sumGroundDist.toFixed(3)} m.</b></td>
@@ -2481,7 +2505,7 @@ function generateConclusion() {
     ['Datum',                     'PRS92',                                WHITE],
     ['Zone',                      '3',                                    YEL_LIGHT],
     ['Loop No. ' + loopNo,        start1+','+start2+' To '+close1+','+close2, WHITE],
-    ['Combined Scale Factor',     sf,                                     YEL_LIGHT],
+    ['Combined Scale Factor (CSF)', (typeof csf !== 'undefined' ? csf.toFixed(8) : sf), YEL_LIGHT],
     ['Azimuth from Fix point',    cv.azStartStr,                          WHITE],
     ['Azimuth from Rerun',        cv.azCloseStr,                          YEL_LIGHT],
     ['Error Angle Max('+cv.kFactor+'√n)/Actual', cv.angTolSec.toFixed(2)+'/-'+Math.abs(cv.angErrSec).toFixed(2)+' second', WHITE],
@@ -2783,6 +2807,19 @@ function renderSchematic() {
     pts = SCH_STATIONS.map(s => ({...s, role: typeMap[s.name] || s.role }));
   }
 
+  // Normalize roles: map 'Secondary'→'start'/'close' based on position in pts array
+  if (pts.length > 0) {
+    const s1 = (document.getElementById('startPt1Name')||{value:''}).value;
+    const s2 = (document.getElementById('startPt2Name')||{value:''}).value;
+    const c1 = (document.getElementById('closePt1Name')||{value:''}).value;
+    const c2 = (document.getElementById('closePt2Name')||{value:''}).value;
+    pts.forEach(p => {
+      if (p.name===s1 || p.name===s2) p.role = 'start';
+      else if (p.name===c1 || p.name===c2) p.role = 'close';
+      else if (p.role!=='Primary') p.role = 'traverse';
+    });
+  }
+
   const VW = 820, VH = 880;
   const PL = 150, PR = 90, PT = 70, PB = 110;
   const drawW = (VW - PL - PR) * zoom;
@@ -2838,8 +2875,9 @@ function renderSchematic() {
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i], b = pts[i+1];
     const pa = px(a.N, a.E), pb = px(b.N, b.E);
-    const isCtrl = (a.role==='start' && b.role==='start') ||
-                   (a.role==='close' && b.role==='close');
+    const isCtrlA = (a.role==='start' || a.role==='close');
+    const isCtrlB = (b.role==='start' || b.role==='close');
+    const isCtrl = isCtrlA && isCtrlB;
     const col   = isCtrl ? '#3dbb8f' : '#e8a838';
     const dash  = isCtrl ? '9 4'     : 'none';
     const width = isCtrl ? '2.8'     : '2';
@@ -2854,8 +2892,9 @@ function renderSchematic() {
     // Distance mid-leg
     if (showDi) {
       const key = a.name + '→' + b.name;
-      const dist = SCH_DISTS[key] ||
-        (state.meanDistances && state.meanDistances[a.name]) || null;
+      const dist = SCH_DISTS[key]
+        || (state.meanDistances?.[a.name])
+        || null;
       if (dist) {
         const mx = (pa.x+pb.x)/2, my = (pa.y+pb.y)/2;
         const dx = pb.x-pa.x, dy = pb.y-pa.y, len = Math.sqrt(dx*dx+dy*dy)||1;
@@ -3608,7 +3647,7 @@ function buildTraverseXls(wb, loopNo, fileName) {
   I(`From Station : ${G('startPt1Name')},${G('startPt2Name')}`,`To Station : ${G('closePt1Name')},${G('closePt2Name')}`,'108286');
   F(`Azimuth from Fix/Azimuth from Rerun = ${cv.azStartStr}/${cv.azComputedStr}`,                               'E97034');
   I(`Error Angle Max(${cv.kFactor}√n)/Actual = ${cv.angTolSec.toFixed(2)}/${cv.angErrSec.toFixed(2)} second`,  `Correction angle = ${cv.corrPerStationSec.toFixed(2)} second`,'88100B');
-  I('Mean Latitude = N/A',                                      `Combined Scale Factor = ${G('scaleFactor')}`,  '0038F8');
+  I('Mean Latitude = N/A',                                      `Combined Scale Factor (CSF) = ${(cv.csf||parseFloat(G('scaleFactor'))).toFixed(8)}`,  '0038F8');
   I(`Sum Observed Distance = ${cv.sumGroundDist.toFixed(3)} m.`,`SumGrid Distance = ${cv.sumGridDist.toFixed(3)} m.`,'0038F8');
   I(`Error in Northing = ${cv.errN} m.`,                       `Error in Easting = ${cv.errE} m.`,              '0038F8');
   I(`Linear Closure : ${cv.linearClosure.toFixed(3)} m.`,      `Linear error 1:20,000-1:150,000 / Actual 1: ${cv.linearRatio.toLocaleString()}`,'1D3157');
@@ -3774,7 +3813,7 @@ function buildConclusionXls(wb, loopNo, fileName) {
   const infos=[['Coordinate System','Philippine Transverse Mercator(PTM)'],
     ['Period Date:','March 2025'],['Datum','PRS92'],['Zone','3'],
     [`Loop No. ${loopNo}`,`${G('startPt1Name')},${G('startPt2Name')} To ${G('closePt1Name')},${G('closePt2Name')}`],
-    ['Combined Scale Factor',sf],
+    ['Combined Scale Factor (CSF)', (cv?.csf || sf)],
     ['Azimuth from Fix point',cv.azStartStr],
     ['Azimuth from Rerun',cv.azComputedStr],
     [`Error Angle Max(${cv.kFactor}√n)/Actual`,`${cv.angTolSec.toFixed(2)}/-${Math.abs(cv.angErrSec).toFixed(2)} second`],
