@@ -1190,7 +1190,7 @@ function calcAngles() {
     const setRows = setResults.map(s => {
       if(!s.ok) return `<tr>
         <td style="padding:3px 8px;color:var(--text2)">Set ${s.set}</td>
-        <td colspan="3" style="padding:3px 8px;color:var(--red);font-size:10px">— ข้อมูลไม่ครบ</td>
+        <td colspan="4" style="padding:3px 8px;color:var(--red);font-size:10px">— ข้อมูลไม่ครบ</td>
       </tr>`;
       const dL = dec2dms(s.angL), dR = dec2dms(s.angR), dM = dec2dms(s.mean);
       const diffSec = Math.abs(s.angL - s.angR) * 3600;
@@ -1200,6 +1200,7 @@ function calcAngles() {
         <td style="padding:3px 8px;font-family:var(--font-mono);font-size:11px;color:var(--blue)">${fmtDms(dL.d,dL.m,dL.s)}</td>
         <td style="padding:3px 8px;font-family:var(--font-mono);font-size:11px;color:var(--purple)">${fmtDms(dR.d,dR.m,dR.s)}</td>
         <td style="padding:3px 8px;font-family:var(--font-mono);font-size:11px;color:var(--accent);font-weight:600">${fmtDms(dM.d,dM.m,dM.s)}</td>
+        <td style="padding:3px 8px;font-family:var(--font-mono);font-size:10px;color:var(--text2)">${s.mean.toFixed(6)}°</td>
         <td style="padding:3px 8px;font-size:10px;color:${diffOk?'var(--green)':'var(--red)'}">${diffSec.toFixed(1)}" ${diffOk?'✓':'✗'}</td>
       </tr>`;
     }).join('');
@@ -1209,7 +1210,8 @@ function calcAngles() {
         <th style="padding:3px 8px;font-size:10px;color:var(--text2);text-align:left">Set</th>
         <th style="padding:3px 8px;font-size:10px;color:var(--blue);text-align:left">Face L</th>
         <th style="padding:3px 8px;font-size:10px;color:var(--purple);text-align:left">Face R</th>
-        <th style="padding:3px 8px;font-size:10px;color:var(--accent);text-align:left">Mean</th>
+        <th style="padding:3px 8px;font-size:10px;color:var(--accent);text-align:left">Mean (DMS)</th>
+        <th style="padding:3px 8px;font-size:10px;color:var(--text2);text-align:left">Mean (Dec°)</th>
         <th style="padding:3px 8px;font-size:10px;color:var(--text2);text-align:left">L−R Diff</th>
       </tr></thead>
       <tbody>${setRows}</tbody>
