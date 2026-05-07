@@ -1074,7 +1074,15 @@ function buildAngleTable() {
         <tbody>${rows}</tbody>
       </table>
       </div>
-      <div id="ang-result-${stName}" style="margin-top:8px;padding:8px;background:var(--surface2);border-radius:6px;font-size:12px;display:none"></div>
+      <div id="ang-result-${stName}" style="margin-top:10px;display:none">
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+          <div style="background:rgba(63,185,80,0.12);border-bottom:1px solid var(--border);padding:6px 12px;font-size:11px;font-weight:700;color:var(--green);letter-spacing:0.5px">
+            ▸ สรุปมุม — ${stName}
+          </div>
+          <div id="ang-sets-${stName}" style="padding:8px 12px"></div>
+          <div id="ang-mean-${stName}" style="padding:6px 12px;border-top:1px solid var(--border);background:rgba(232,168,56,0.06)"></div>
+        </div>
+      </div>
     `;
     div.appendChild(card);
   });
@@ -1139,48 +1147,98 @@ function loadDefaultAngles() {
 }
 
 function calcAngles() {
-  // Use default mean angles if available, else compute from 4-set mean
-  if(Object.keys(state.meanAngles).length === 0) {
-    state.meanAngles = {};
-    state.stations.forEach(st => {
-      const stName = st.name;
-      const codes = state.angles[stName] || [];
-      const setAngles = [];
-      for(let set=0; set<4; set++) {
-        const bs_L_code = codes[set*4]?.code;
-        const fs_L_code = codes[set*4+1]?.code;
-        const fs_R_code = codes[set*4+2]?.code;
-        const bs_R_code = codes[set*4+3]?.code;
-        if(!bs_L_code || !fs_L_code || !fs_R_code || !bs_R_code) continue;
-        const bs_L = parseDmsCode(parseInt(bs_L_code));
-        const fs_L = parseDmsCode(parseInt(fs_L_code));
-        const fs_R = parseDmsCode(parseInt(fs_R_code));
-        const bs_R = parseDmsCode(parseInt(bs_R_code));
-        const bsL_dec = dms2dec(bs_L.d,bs_L.m,bs_L.s);
-        const fsL_dec = dms2dec(fs_L.d,fs_L.m,fs_L.s);
-        const fsR_dec = dms2dec(fs_R.d,fs_R.m,fs_R.s);
-        const bsR_dec = dms2dec(bs_R.d,bs_R.m,bs_R.s);
-        const angL = ((fsL_dec - bsL_dec) + 360) % 360;
-        const angR = ((fsR_dec - bsR_dec) + 360) % 360;
-        setAngles.push((angL + angR) / 2);
-      }
-      if(setAngles.length > 0) {
-        state.meanAngles[stName] = setAngles.reduce((a,b)=>a+b,0) / setAngles.length;
-      }
-    });
-  }
-  // Show results
+  state.meanAngles = {};
+
   state.stations.forEach(st => {
     const stName = st.name;
-    const el = document.getElementById(`ang-result-${stName}`);
-    if(!el) return;
-    if(state.meanAngles[stName]) {
-      const dms = dec2dms(state.meanAngles[stName]);
-      el.innerHTML = `<span style="color:var(--green)">✓ Mean Angle: <strong style="color:var(--accent)">${fmtDms(dms.d,dms.m,dms.s)}</strong> = ${state.meanAngles[stName].toFixed(8)}°</span>`;
-      el.style.display = 'block';
+    const codes  = state.angles[stName] || [];
+    const numSets = state.stationSets[stName] || 4;
+    const setResults = [];   // { set, angL, angR, mean, ok }
+
+    for(let set=0; set<numSets; set++) {
+      const base = set*4;
+      const bs_L_code = codes[base]?.code;
+      const fs_L_code = codes[base+1]?.code;
+      const fs_R_code = codes[base+2]?.code;
+      const bs_R_code = codes[base+3]?.code;
+      if(!bs_L_code || !fs_L_code || !fs_R_code || !bs_R_code) {
+        setResults.push({ set:set+1, ok:false });
+        continue;
+      }
+      const bsL = dms2dec(...Object.values(parseDmsCode(parseInt(bs_L_code))));
+      const fsL = dms2dec(...Object.values(parseDmsCode(parseInt(fs_L_code))));
+      const fsR = dms2dec(...Object.values(parseDmsCode(parseInt(fs_R_code))));
+      const bsR = dms2dec(...Object.values(parseDmsCode(parseInt(bs_R_code))));
+      const angL = ((fsL - bsL) + 360) % 360;
+      const angR = ((fsR - bsR) + 360) % 360;
+      const mean = (angL + angR) / 2;
+      setResults.push({ set:set+1, angL, angR, mean, ok:true });
     }
+
+    const valid = setResults.filter(s => s.ok);
+    if(valid.length > 0) {
+      state.meanAngles[stName] = valid.reduce((a,s)=>a+s.mean,0) / valid.length;
+    }
+
+    // ── Render summary ──
+    const elResult = document.getElementById('ang-result-'+stName);
+    const elSets   = document.getElementById('ang-sets-'+stName);
+    const elMean   = document.getElementById('ang-mean-'+stName);
+    if(!elResult || !elSets || !elMean) return;
+
+    // Per-set table
+    const setRows = setResults.map(s => {
+      if(!s.ok) return `<tr>
+        <td style="padding:3px 8px;color:var(--text2)">Set ${s.set}</td>
+        <td colspan="3" style="padding:3px 8px;color:var(--red);font-size:10px">— ข้อมูลไม่ครบ</td>
+      </tr>`;
+      const dL = dec2dms(s.angL), dR = dec2dms(s.angR), dM = dec2dms(s.mean);
+      const diffSec = Math.abs(s.angL - s.angR) * 3600;
+      const diffOk  = diffSec <= 10;
+      return `<tr>
+        <td style="padding:3px 8px;color:var(--text2);font-size:11px;white-space:nowrap">Set ${s.set}</td>
+        <td style="padding:3px 8px;font-family:var(--font-mono);font-size:11px;color:var(--blue)">${fmtDms(dL.d,dL.m,dL.s)}</td>
+        <td style="padding:3px 8px;font-family:var(--font-mono);font-size:11px;color:var(--purple)">${fmtDms(dR.d,dR.m,dR.s)}</td>
+        <td style="padding:3px 8px;font-family:var(--font-mono);font-size:11px;color:var(--accent);font-weight:600">${fmtDms(dM.d,dM.m,dM.s)}</td>
+        <td style="padding:3px 8px;font-size:10px;color:${diffOk?'var(--green)':'var(--red)'}">${diffSec.toFixed(1)}" ${diffOk?'✓':'✗'}</td>
+      </tr>`;
+    }).join('');
+
+    elSets.innerHTML = `<table style="width:100%;border-collapse:collapse">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="padding:3px 8px;font-size:10px;color:var(--text2);text-align:left">Set</th>
+        <th style="padding:3px 8px;font-size:10px;color:var(--blue);text-align:left">Face L</th>
+        <th style="padding:3px 8px;font-size:10px;color:var(--purple);text-align:left">Face R</th>
+        <th style="padding:3px 8px;font-size:10px;color:var(--accent);text-align:left">Mean</th>
+        <th style="padding:3px 8px;font-size:10px;color:var(--text2);text-align:left">L−R Diff</th>
+      </tr></thead>
+      <tbody>${setRows}</tbody>
+    </table>`;
+
+    // Grand mean
+    if(state.meanAngles[stName]) {
+      const gm = state.meanAngles[stName];
+      const gmDms = dec2dms(gm);
+      // Check range spread across sets
+      const spread = valid.length > 1
+        ? (Math.max(...valid.map(s=>s.mean)) - Math.min(...valid.map(s=>s.mean))) * 3600
+        : 0;
+      const spreadOk = spread <= 10;
+      elMean.innerHTML = `
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          <span style="font-size:11px;color:var(--text2)">Grand Mean (${valid.length} sets)</span>
+          <span style="font-family:var(--font-mono);font-size:13px;font-weight:700;color:var(--accent)">${fmtDms(gmDms.d,gmDms.m,gmDms.s)}</span>
+          <span style="font-family:var(--font-mono);font-size:11px;color:var(--text2)">${gm.toFixed(6)}°</span>
+          ${valid.length>1?`<span style="font-size:10px;color:${spreadOk?'var(--green)':'var(--red)'}">Spread: ${spread.toFixed(1)}" ${spreadOk?'✓':'⚠'}</span>`:''}
+        </div>`;
+    } else {
+      elMean.innerHTML = '<span style="color:var(--text2);font-size:11px">— ไม่มีข้อมูลเพียงพอ</span>';
+    }
+    elResult.style.display = 'block';
   });
-  document.getElementById('angleStatus').innerHTML = '<div class="success-msg">✓ Mean angles calculated</div>';
+
+  document.getElementById('angleStatus').innerHTML =
+    `<div class="success-msg">✓ คำนวณ Mean Angle ครบ ${Object.keys(state.meanAngles).length} station</div>`;
 }
 
 // ============================================================
